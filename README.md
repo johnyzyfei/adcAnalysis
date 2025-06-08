@@ -1,0 +1,1 @@
+This repository contains code and outputs for the analysis of quantitative ADC metrics in relation to treatment response in cancer patients. The goal is to assess whether ADC-derived features from MRI scans can help distinguish responders from non-responders.
