@@ -5,6 +5,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 import os
 
+# For displaying results in table
 # -----------------------------------------------------------------------------
 def fmt_num(x, small=1e-3, large=1e3, prec=3):
     """
@@ -94,15 +95,15 @@ for label, predictor in predictors.items():
     roc_auc     = auc(fpr, tpr)
     summary.loc[len(summary)] = ['AUC', roc_auc, np.nan, np.nan, np.nan]
 
-    # format for human readability
+    # formatting
     for col in ['OR','2.5% CI','97.5% CI','p-value']:
         summary[col] = summary[col].apply(fmt_num)
 
-    # save CSV
+    # saving CSV
     safe = label.lower().replace(' ','_').replace('%','pct')
     summary.to_csv(os.path.join(output_dir, f'logistic_results_{safe}.csv'), index=False)
 
-    # plot ROC curve
+    # plotting ROC
     plt.figure()
     plt.plot(fpr, tpr, label=f'AUC = {roc_auc:.2f}')
     plt.plot([0,1],[0,1],'k--')
@@ -132,4 +133,4 @@ for label, predictor in predictors.items():
     plt.savefig(os.path.join(output_dir, f'table_{safe}.png'), dpi=300)
     plt.close()
 
-    print(f"✔ Outputs saved for {label}  (method={method_tag}, AUC={roc_auc:.3f})")
+    print(f"Outputs saved for {label}  (method={method_tag}, AUC={roc_auc:.3f})")

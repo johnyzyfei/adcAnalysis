@@ -27,7 +27,6 @@ predictors = {
 output_dir = r'C:\Users\johny\OneDrive\Desktop\Lab\adc_analysis\results_output_set2'
 os.makedirs(output_dir, exist_ok=True)
 
-# Loop through predictors
 for label, predictor in predictors.items():
     print(f'\n--- Running analysis for: {label} ---\n')
 
