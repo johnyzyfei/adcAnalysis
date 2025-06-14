@@ -67,9 +67,31 @@ for label, predictor in predictors.items():
 
         # AUC and ROC
         pred_probs = model.predict(X)
-        fpr, tpr, _ = roc_curve(y, pred_probs)
+        fpr, tpr, thresholds = roc_curve(y, pred_probs)
         roc_auc = auc(fpr, tpr)
+
+        # Optimal threshold (Youden's J)
+        j_scores = tpr - fpr
+        best_idx = np.argmax(j_scores)
+        best_thresh = thresholds[best_idx]
+
+        # Binary predictions
+        y_pred = (pred_probs >= best_thresh).astype(int)
+
+        # Confusion matrix components
+        TP = np.sum((y == 1) & (y_pred == 1))
+        TN = np.sum((y == 0) & (y_pred == 0))
+        FP = np.sum((y == 0) & (y_pred == 1))
+        FN = np.sum((y == 1) & (y_pred == 0))
+
+        # Sensitivity & Specificity
+        sensitivity = TP / (TP + FN) if (TP + FN) > 0 else np.nan
+        specificity = TN / (TN + FP) if (TN + FP) > 0 else np.nan
+
+        # Append AUC, Sensitivity, Specificity
         summary_df.loc[len(summary_df)] = ['AUC', round(roc_auc, 3), '', '', '']
+        summary_df.loc[len(summary_df)] = ['Sensitivity', round(sensitivity, 3), '', '', '']
+        summary_df.loc[len(summary_df)] = ['Specificity', round(specificity, 3), '', '', '']
 
         # Save CSV
         safe_label = label.lower().replace(' ', '_').replace('%', 'pct')
@@ -104,6 +126,6 @@ for label, predictor in predictors.items():
         plt.savefig(os.path.join(output_dir, f'logistic_results_{safe_label}_set2_unpenalized.png'), dpi=300)
         plt.close()
 
-        print(f' Completed: {label} | AUC = {roc_auc:.3f}')
+        print(f' Completed: {label} | AUC = {roc_auc:.3f} | Sensitivity = {sensitivity:.3f} | Specificity = {specificity:.3f}')
     except Exception as e:
         print(f' Failed for {label} due to: {e}')

@@ -1,115 +1,129 @@
 import pandas as pd
 import numpy as np
-import statsmodels.api as sm
-from sklearn.metrics import roc_curve, auc
 import matplotlib.pyplot as plt
 import os
+from sklearn.linear_model import LogisticRegression
+from sklearn.pipeline import make_pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import roc_curve, roc_auc_score
+from sklearn.utils import resample
 
-# For displaying results in table
-# -----------------------------------------------------------------------------
-def fmt_num(x, small=1e-3, large=1e3, prec=3):
-    try:
-        if pd.isna(x):
-            return ""
-        if x <= 0 or x < small:
-            return f"<{small:.{prec}f}"
-        if x > large:
-            return f">{large:.{prec}f}"
-        return f"{x:.{prec}f}"
-    except:
-        return str(x)
-# ---------------------------------------------------------------------
+# === Load data ===
+file_path = r"C:\Users\johny\OneDrive\Desktop\Lab\adc_analysis\additional work sheet June 12, 2025.xlsx"
+output_dir = r"C:\Users\johny\OneDrive\Desktop\Lab\adc_analysis\results_output"
+os.makedirs(output_dir, exist_ok=True)
 
-# Load and clean data
-file_path = r'C:\Users\johny\OneDrive\Desktop\Lab\adc_analysis\Quantitative ADC in Anal ca  Data sheet APRIL May 28, 2025 version 2.xlsx'
-df = pd.read_excel(file_path, sheet_name='analysis sheet', engine='openpyxl')
+df = pd.read_excel(file_path, sheet_name="Sheet1", engine="openpyxl")
+df.columns = df.columns.str.strip()
 
-outcome = 'Responders/Non R'
-exposure = 'ADC diff % with min '
-confounders = ['Age', 'Gender', 'HPV', 'HIV']
-df = df[[outcome, exposure] + confounders].apply(pd.to_numeric, errors='coerce').dropna()
-df[exposure] = df[exposure].clip(0, 100)
+# === Define variables ===
+predictor = "ADC diff % with min"
+outcome = "Responders/Non R"
+confounders = ["Age", "Gender", "HPV", "HIV"]
+label = predictor
 
-y = df[outcome]
-X = sm.add_constant(df[[exposure] + confounders])
+# === Clean and prepare data ===
+data = df[[predictor, outcome] + confounders].dropna()
+data[predictor] = data[predictor].clip(0, 100)
+X = data[[predictor] + confounders]
+y = data[outcome]
 
-# Fit Ridge logistic regression
-model = sm.Logit(y, X)
-result = model.fit_regularized(alpha=0.1, L1_wt=0, maxiter=1000)
+# === Fit penalized logistic regression ===
+pipe = make_pipeline(StandardScaler(), LogisticRegression(penalty='l2', solver='liblinear'))
+pipe.fit(X, y)
+model = pipe.named_steps['logisticregression']
 
-# Extract odds ratios
-ORs = np.exp(result.params)
+# === Odds Ratios and Coefficients ===
+coefs = np.concatenate([[model.intercept_[0]], model.coef_[0]])
+odds_ratios = np.exp(coefs)
+variables = ['Intercept'] + list(X.columns)
 
-# Bootstrap for 95% CI
-B = 500
-boot_coefs = []
-np.random.seed(42)
-for _ in range(B):
-    sample_idx = np.random.choice(len(df), size=len(df), replace=True)
-    Xb = X.iloc[sample_idx]
-    yb = y.iloc[sample_idx]
-    try:
-        boot_fit = sm.Logit(yb, Xb).fit_regularized(alpha=0.1, L1_wt=0, disp=0)
-        boot_coefs.append(boot_fit.params.values)
-    except:
-        continue
+# === Bootstrap for 95% CI ===
+boot_or = []
+for _ in range(1000):
+    Xr, yr = resample(X, y)
+    bs_pipe = make_pipeline(StandardScaler(), LogisticRegression(penalty='l2', solver='liblinear'))
+    bs_pipe.fit(Xr, yr)
+    bs_model = bs_pipe.named_steps['logisticregression']
+    bs_coefs = np.concatenate([[bs_model.intercept_[0]], bs_model.coef_[0]])
+    boot_or.append(np.exp(bs_coefs))
 
-boot_coefs = np.array(boot_coefs)
-ci_lower = np.exp(np.percentile(boot_coefs, 2.5, axis=0))
-ci_upper = np.exp(np.percentile(boot_coefs, 97.5, axis=0))
+boot_or = np.array(boot_or)
+ci_lower = np.percentile(boot_or, 2.5, axis=0)
+ci_upper = np.percentile(boot_or, 97.5, axis=0)
 
-# Two-tailed p-values from bootstrap distribution
-pvals = []
-for j, val in enumerate(result.params):
-    null_dist = boot_coefs[:, j]
-    p = np.mean(np.abs(null_dist) >= np.abs(val))
-    pvals.append(p)
+# === Model evaluation: AUC, sensitivity, specificity ===
+probs = pipe.predict_proba(X)[:, 1]
+fpr, tpr, thresholds = roc_curve(y, probs)
+roc_auc = roc_auc_score(y, probs)
+best_thresh = thresholds[np.argmax(tpr - fpr)]
+y_pred = (probs >= best_thresh).astype(int)
 
-# Compute AUC
-probs = result.predict(X)
-fpr, tpr, _ = roc_curve(y, probs)
-roc_auc = auc(fpr, tpr)
+TP = ((y == 1) & (y_pred == 1)).sum()
+TN = ((y == 0) & (y_pred == 0)).sum()
+FP = ((y == 0) & (y_pred == 1)).sum()
+FN = ((y == 1) & (y_pred == 0)).sum()
 
-# Create summary DataFrame
+sensitivity = TP / (TP + FN) if TP + FN > 0 else np.nan
+specificity = TN / (TN + FP) if TN + FP > 0 else np.nan
+
+# === Formatting helper ===
+def fmt(x):
+    if pd.isna(x): return ""
+    if isinstance(x, float): return f"{x:.3f}"
+    return str(x)
+
+# === Build summary DataFrame ===
 summary = pd.DataFrame({
-    'Variable': X.columns,
-    'OR': ORs,
-    '2.5% CI': ci_lower,
-    '97.5% CI': ci_upper,
-    'p-value': pvals
+    "Variable": variables,
+    "OR": [fmt(v) for v in odds_ratios],
+    "2.5% CI": [fmt(v) for v in ci_lower],
+    "97.5% CI": [fmt(v) for v in ci_upper],
+    "p-value": [""] * len(variables)
 })
-summary.loc[len(summary)] = ['AUC', roc_auc, np.nan, np.nan, np.nan]
+summary.loc[len(summary)] = ["AUC", fmt(roc_auc), "", "", ""]
+summary.loc[len(summary)] = ["Sensitivity", fmt(sensitivity), "", "", ""]
+summary.loc[len(summary)] = ["Specificity", fmt(specificity), "", "", ""]
 
-# Format all numeric columns using fmt_num()
-for col in ['OR', '2.5% CI', '97.5% CI', 'p-value']:
-    summary[col] = summary[col].apply(fmt_num)
+# === Save CSV ===
+safe_label = label.lower().replace(" ", "_").replace("%", "pct")
+csv_path = os.path.join(output_dir, f"logit_penalized_{safe_label}.csv")
+summary.to_csv(csv_path, index=False)
 
-# Save summary table as image
-fig, ax = plt.subplots(figsize=(9, len(summary) * 0.5 + 1))
+# === Save summary table as PNG (with enough height) ===
+fig_height = len(summary) * 0.6 + 2
+fig, ax = plt.subplots(figsize=(8, fig_height))
 ax.axis('off')
-tbl = ax.table(cellText=summary.values,
-               colLabels=summary.columns,
-               cellLoc='center',
-               loc='center')
+tbl = ax.table(
+    cellText=summary.values,
+    colLabels=summary.columns,
+    cellLoc='center',
+    loc='center'
+)
 tbl.auto_set_font_size(False)
 tbl.set_fontsize(10)
 tbl.scale(1.2, 1.2)
-plt.title('Penalized Logistic Regression – ADC diff % with min', pad=20)
+plt.title(f"Penalized Logistic Regression – {label}", pad=20)
 plt.tight_layout()
-plt.savefig(r'C:\Users\johny\OneDrive\Desktop\Lab\adc_analysis\results_output\table_adc_diff_pct_with_min_penalized_full.png', dpi=300)
+png_path = os.path.join(output_dir, f"logit_penalized_{safe_label}.png")
+plt.savefig(png_path, dpi=300)
 plt.close()
 
-# Save ROC curve
-plt.figure(figsize=(6, 5))
-plt.plot(fpr, tpr, label=f'AUC = {roc_auc:.3f}')
-plt.plot([0, 1], [0, 1], 'k--')
-plt.xlabel('False Positive Rate')
-plt.ylabel('True Positive Rate')
-plt.title('ROC Curve – ADC diff % with min (Penalized)')
-plt.legend(loc='lower right')
+# === Save ROC Curve ===
+plt.figure()
+plt.plot(fpr, tpr, label=f"AUC = {roc_auc:.2f}")
+plt.plot([0, 1], [0, 1], "k--")
+plt.xlabel("False Positive Rate")
+plt.ylabel("True Positive Rate")
+plt.title(f"ROC Curve – {label}")
+plt.legend()
 plt.grid(True)
 plt.tight_layout()
-plt.savefig(r'C:\Users\johny\OneDrive\Desktop\Lab\adc_analysis\results_output\roc_adc_diff_pct_with_min_penalized.png', dpi=300)
+roc_path = os.path.join(output_dir, f"roc_penalized_{safe_label}.png")
+plt.savefig(roc_path, dpi=300)
 plt.close()
 
-print(summary)
+print("✅ All outputs saved:")
+print(f"📊 Table PNG: {png_path}")
+print(f"📈 ROC PNG:   {roc_path}")
+print(f"📄 CSV:       {csv_path}")

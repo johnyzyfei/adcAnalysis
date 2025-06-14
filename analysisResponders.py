@@ -6,15 +6,7 @@ import numpy as np
 import os
 
 # For displaying results in table
-# -----------------------------------------------------------------------------
 def fmt_num(x, small=1e-3, large=1e3, prec=3):
-    """
-    Format floats for a results table:
-      - x <= 0 or x < small    -> '<{small:.{prec}f}'
-      - x > large               -> '>{large:.{prec}f}'
-      - NaN                     -> ''
-      - else                    -> '{x:.{prec}f}'
-    """
     try:
         if pd.isna(x):
             return ""
@@ -25,7 +17,6 @@ def fmt_num(x, small=1e-3, large=1e3, prec=3):
         return f"{x:.{prec}f}"
     except:
         return str(x)
-# -----------------------------------------------------------------------------
 
 # Paths & I/O setup
 file_path  = r'C:\Users\johny\OneDrive\Desktop\Lab\adc_analysis\Quantitative ADC in Anal ca  Data sheet APRIL May 28, 2025 version 2.xlsx'
@@ -48,7 +39,7 @@ predictors = {
 }
 
 for label, predictor in predictors.items():
-    # Skip "ADC diff % with min"
+    # Skip problematic predictor
     if label == 'ADC diff % with min':
         print(f"\n=== {label} skipped ===")
         continue
@@ -64,8 +55,6 @@ for label, predictor in predictors.items():
         data[predictor] = data[predictor].clip(0, 100)
 
     y = data[outcome]
-
-    # Always multivariable fit
     X = data[[predictor] + confounders]
     method_tag = 'multivariable'
 
@@ -90,10 +79,32 @@ for label, predictor in predictors.items():
         'p-value' : pvals.values
     })
 
-    # compute AUC and append as last row
-    fpr, tpr, _ = roc_curve(y, pred_probs)
-    roc_auc     = auc(fpr, tpr)
+    # compute ROC and AUC
+    fpr, tpr, thresholds = roc_curve(y, pred_probs)
+    roc_auc = auc(fpr, tpr)
+
+    # Find optimal threshold using Youden's J
+    j_scores = tpr - fpr
+    j_best_idx = np.argmax(j_scores)
+    best_thresh = thresholds[j_best_idx]
+
+    # Binary predictions at optimal threshold
+    y_pred = (pred_probs >= best_thresh).astype(int)
+
+    # Confusion matrix components
+    TP = np.sum((y == 1) & (y_pred == 1))
+    TN = np.sum((y == 0) & (y_pred == 0))
+    FP = np.sum((y == 0) & (y_pred == 1))
+    FN = np.sum((y == 1) & (y_pred == 0))
+
+    # Sensitivity and Specificity
+    sensitivity = TP / (TP + FN) if (TP + FN) > 0 else np.nan
+    specificity = TN / (TN + FP) if (TN + FP) > 0 else np.nan
+
+    # Append AUC, sensitivity, specificity
     summary.loc[len(summary)] = ['AUC', roc_auc, np.nan, np.nan, np.nan]
+    summary.loc[len(summary)] = ['Sensitivity', sensitivity, np.nan, np.nan, np.nan]
+    summary.loc[len(summary)] = ['Specificity', specificity, np.nan, np.nan, np.nan]
 
     # formatting
     for col in ['OR','2.5% CI','97.5% CI','p-value']:
